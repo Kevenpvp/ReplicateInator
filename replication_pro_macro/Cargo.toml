@@ -1,0 +1,13 @@
+[package]
+name = "replication_pro_macro"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { version = "1.0.107" }
+quote = { version = "1.0.47" }
+syn = { version = "3.0.6", features = ["full", "parsing"] }
