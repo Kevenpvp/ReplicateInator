@@ -7,7 +7,7 @@ use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::{Bundle, Commands, Component, Entity, Plugin, Query, Res, Resource, With, World};
 use crate::shared::plugins::replicate::{ReplicateSystemToClient, ServerComponentRegistry};
 
-pub struct ServerReplicate;
+pub struct ReplicateServer;
 
 pub trait RegisterServerReplicationSystem{
     fn register_server_replication_system<T: ServerReplicationSystem>(&mut self, schedule: impl ScheduleLabel);
@@ -16,13 +16,13 @@ pub trait RegisterServerReplicationSystem{
 #[allow(dead_code)]
 #[derive(Component)]
 pub struct ServerReplicator{
-    pub(crate) owner: Option<Uuid>,
-    pub(crate) replication_owner: Option<Uuid>,
-    pub(crate) connection_id: u32,
-    pub(crate) port: u32,
-    pub(crate) just_for_authenticated: bool,
-    pub(crate) send_args: Option<SendArgs>,
-    pub(crate) bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
+    pub owner: Option<Uuid>,
+    pub replication_owner: Option<Uuid>,
+    pub connection_id: u32,
+    pub port: u32,
+    pub just_for_authenticated: bool,
+    pub send_args: Option<SendArgs>,
+    pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
 }
 
 #[derive(Resource,Default)]
@@ -146,7 +146,7 @@ impl RegisterServerReplicationSystem for App {
     }
 }
 
-impl Plugin for ServerReplicate {
+impl Plugin for ReplicateServer {
     fn build(&self, app: &mut App) {
         app.init_resource::<ServerSystemRegistry>();
     }

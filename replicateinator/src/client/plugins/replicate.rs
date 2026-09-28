@@ -1,9 +1,9 @@
-use std::any::{Any, TypeId};
+use std::any::{TypeId};
 use std::collections::{HashMap, VecDeque};
 use bevy::app::App;
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::log::warn;
-use bevy::prelude::{AppTypeRegistry, Bundle, Commands, Component, Entity, FromReflect, MessageReader, PartialReflect, Plugin, PreUpdate, Query, ReflectComponent, Res, ResMut, Resource, With, World};
+use bevy::prelude::{Bundle, Commands, Component, Entity, FromReflect, MessageReader, PartialReflect, Plugin, PreUpdate, Query, ReflectComponent, Res, ResMut, Resource, With, World};
 use bevy::reflect::ReflectMut;
 use networkinator::shared::plugins::messaging::MessageReceivedFromServer;
 use crate::shared::plugins::replicate::{ClientComponentRegistry, ReplicateSystemToClient};
@@ -87,16 +87,13 @@ pub trait ClientReplicationSystem: Default + Component + Sized{
 
     fn apply_replication(world: &mut World, entity: Entity, components_bytes: HashMap<u32, Vec<u8>>) {
         let reflects = Self::bytes_to_partials(world, components_bytes);
-        let type_registry = world.resource::<AppTypeRegistry>().clone();
-        let type_registry_read = type_registry.read();
-        let mut entity_mut = world.get_entity_mut(entity).unwrap();
+        let self_system = world.get::<Self>(entity).unwrap();
+        let bundle = self_system.partials_to_bundle(reflects);
 
-        for reflect in reflects {
-            let type_id = (*reflect).type_id();
-            let registration = type_registry_read.get(type_id).unwrap();
-            let reflect_component = registration.data::<ReflectComponent>().unwrap();
-
-            reflect_component.insert(&mut entity_mut, &*reflect, &*type_registry_read);
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.insert(bundle);
+        } else {
+            warn!("Entity {:?} não encontrada ao aplicar replicação", entity);
         }
     }
 
