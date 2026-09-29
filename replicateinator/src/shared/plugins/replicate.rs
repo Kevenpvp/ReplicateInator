@@ -32,6 +32,11 @@ pub struct ReplicateSystemToClient{
     pub system_id: u32
 }
 
+#[derive(Serialize,Deserialize,ConnectionMessage)]
+pub struct SendEntityRemovedForClient{
+    pub entity: Entity
+}
+
 #[derive(Component,Serialize,Deserialize,Reflect)]
 pub struct Health;
 
@@ -44,6 +49,7 @@ pub struct ClientComponentRegistry(pub(crate) u32, pub(crate) HashMap<TypeId, u3
 impl Plugin for ReplicateShared {
     fn build(&self, app: &mut App) {
         app.register_message::<ReplicateSystemToClient>();
+        app.register_message::<SendEntityRemovedForClient>();
 
         let (is_client, is_local_server, is_dedicated_server) = {
             let world = app.world_mut();

@@ -1,12 +1,14 @@
 use std::any::{TypeId};
 use std::collections::{HashMap, VecDeque};
 use bevy::app::App;
+use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::schedule::ScheduleLabel;
+use bevy::ecs::world::DeferredWorld;
 use bevy::log::warn;
-use bevy::prelude::{Bundle, Commands, Component, Entity, FromReflect, MessageReader, PartialReflect, Plugin, PreUpdate, Query, ReflectComponent, Res, ResMut, Resource, With, World};
+use bevy::prelude::{Bundle, Commands, Component, Entity, First, FromReflect, MessageReader, PartialReflect, Plugin, PreUpdate, Query, Res, ResMut, Resource, With, World};
 use bevy::reflect::ReflectMut;
 use networkinator::shared::plugins::messaging::MessageReceivedFromServer;
-use crate::shared::plugins::replicate::{ClientComponentRegistry, ReplicateSystemToClient};
+use crate::shared::plugins::replicate::{ClientComponentRegistry, ReplicateSystemToClient, SendEntityRemovedForClient};
 
 pub struct ReplicateClient;
 
@@ -26,8 +28,10 @@ pub struct ClientSystemRegistry(pub(crate) u32, pub(crate) HashMap<u32, SystemDa
 pub struct EntitiesServerRefs(pub(crate) HashMap<Entity, Entity>);
 
 #[derive(Component)]
+#[component(on_remove = replicated_removed)]
 pub struct Replicated{
     bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
+    ref_server: Entity
 }
 
 pub trait ClientReplicationSystem: Default + Component + Sized{
@@ -150,6 +154,7 @@ fn bytes_from_server(
                     bytes_queue: HashMap::from([
                         (system_data_functions.type_id,new_vec_dequeue)
                     ]),
+                    ref_server: entity_ref,
                 });
                 let entity = new_entity.id();
                 let current_entity = *&entity;
@@ -170,6 +175,7 @@ impl Plugin for ReplicateClient{
         app.init_resource::<ClientSystemRegistry>();
         app.init_resource::<EntitiesServerRefs>();
         app.add_systems(PreUpdate,bytes_from_server);
+        app.add_systems(First,entities_removed_from_server);
     }
 }
 
@@ -194,5 +200,30 @@ impl RegisterClientReplicationSystem for App {
         client_system_registry.2.insert(type_id,new_index);
 
         self.add_systems(schedule,T::new_bytes_from_server);
+    }
+}
+
+fn entities_removed_from_server(
+    entities_server_refs: Res<EntitiesServerRefs>,
+    mut send_entity_removed_for_client: MessageReader<MessageReceivedFromServer<SendEntityRemovedForClient>>,
+    mut commands: Commands,
+){
+    for ev in send_entity_removed_for_client.read() {
+        let send_entity_removed_for_client_message = &ev.message;
+
+        if let Some(entity) = entities_server_refs.0.get(&send_entity_removed_for_client_message.entity) {
+            commands.entity(*entity).despawn();
+        }
+    }
+}
+
+fn replicated_removed(
+    mut world: DeferredWorld,
+    context: HookContext
+){
+    if let Some(ref_server) = world.get::<Replicated>(context.entity).map(|r| r.ref_server.clone()) {
+        let mut entities_server_refs = world.resource_mut::<EntitiesServerRefs>();
+
+        entities_server_refs.0.remove(&ref_server);
     }
 }

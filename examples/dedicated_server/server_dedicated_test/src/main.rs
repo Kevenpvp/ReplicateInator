@@ -68,15 +68,15 @@ fn client_authenticated(
     mut commands: Commands,
 ){
     for ev in client_authenticated_on_server.read() {
-        println!("created client");
-
         if ev.connection_id != 0 { continue; }
 
-        let entity = commands.spawn((ServerReplicator{
+        commands.spawn((ServerReplicator{
             owner: Some(ev.peer_uuid),
             replication_owner: None,
             connection_id: 0,
             port: 0,
+            port_to_remove: 0,
+            destroy_when_owner_left: true,
             just_for_authenticated: true,
             send_args: None,
             bytes_queue: Default::default(),

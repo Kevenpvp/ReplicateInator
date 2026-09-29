@@ -3,9 +3,12 @@ use networkinator::shared::plugins::messaging::{SendArgs, ServerConnectionParams
 use std::collections::{HashMap, VecDeque};
 use bevy::app::App;
 use bevy::asset::uuid::Uuid;
+use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::schedule::ScheduleLabel;
-use bevy::prelude::{Bundle, Commands, Component, Entity, Plugin, Query, Res, Resource, With, World};
-use crate::shared::plugins::replicate::{ReplicateSystemToClient, ServerComponentRegistry};
+use bevy::ecs::world::DeferredWorld;
+use bevy::prelude::{Bundle, Commands, Component, Entity, IntoScheduleConfigs, Last, Message, MessageReader, Plugin, Query, Res, ResMut, Resource, With, World};
+use networkinator::server::plugins::network::PeersDroppedServer;
+use crate::shared::plugins::replicate::{ReplicateSystemToClient, SendEntityRemovedForClient, ServerComponentRegistry};
 
 pub struct ReplicateServer;
 
@@ -15,18 +18,33 @@ pub trait RegisterServerReplicationSystem{
 
 #[allow(dead_code)]
 #[derive(Component)]
+#[component(on_add = replicator_added, on_remove = replicator_removed)]
 pub struct ServerReplicator{
     pub owner: Option<Uuid>,
     pub replication_owner: Option<Uuid>,
     pub connection_id: u32,
     pub port: u32,
+    pub port_to_remove: u32,
+    pub destroy_when_owner_left: bool,
     pub just_for_authenticated: bool,
     pub send_args: Option<SendArgs>,
     pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
 }
 
+#[derive(Message)]
+pub struct ReplicatorRemoved{
+    pub entity: Entity,
+    pub port_to_remove: u32,
+    pub connection_id: u32,
+    pub send_args: Option<SendArgs>,
+}
+
 #[derive(Resource,Default)]
 pub struct ServerSystemRegistry(pub(crate) u32, pub(crate) HashMap<u32, TypeId>, pub(crate) HashMap<TypeId, u32>);
+
+#[derive(Resource,Default)]
+pub struct EntitiesPeerList(pub(crate) HashMap<Uuid,HashMap<Entity,bool>>);
+
 
 pub trait ServerReplicationSystem: Component + Sized {
     type Components: Bundle;
@@ -142,12 +160,123 @@ impl RegisterServerReplicationSystem for App {
         server_system_registry.1.insert(new_index,type_id);
         server_system_registry.2.insert(type_id,new_index);
 
-        self.add_systems(schedule,(T::check_update,T::replicate_to_client));
+        self.add_systems(schedule,(T::check_update,T::replicate_to_client).chain());
     }
 }
 
 impl Plugin for ReplicateServer {
     fn build(&self, app: &mut App) {
+        app.add_message::<ReplicatorRemoved>();
+        app.init_resource::<EntitiesPeerList>();
         app.init_resource::<ServerSystemRegistry>();
+        app.add_systems(Last,(check_peers_left,send_removed_to_peers).chain());
+    }
+}
+
+fn replicator_added(
+    mut world: DeferredWorld,
+    context: HookContext
+){
+    if let Some(replicator) = world.get_mut::<ServerReplicator>(context.entity)
+        && let Some(peer_uuid) = replicator.owner
+    {
+        let mut entities_peer_list = world.resource_mut::<EntitiesPeerList>();
+
+        if let Some(entities) = entities_peer_list.0.get_mut(&peer_uuid) {
+            entities.insert(context.entity,false);
+        }else{
+            entities_peer_list.0.insert(peer_uuid, HashMap::from(
+                [(context.entity,false)]
+            ));
+        }
+    }
+}
+
+fn replicator_removed(
+    mut world: DeferredWorld,
+    context: HookContext
+){
+    let mut removed = false;
+    let mut port_to_remove = 0;
+    let mut send_args: Option<SendArgs> = None;
+    let mut connection_id = 0;
+
+    if let Some(mut replicator) = world.get_mut::<ServerReplicator>(context.entity)
+        && let Some(peer_uuid) = replicator.owner
+    {
+        port_to_remove = replicator.port_to_remove;
+        connection_id = replicator.connection_id;
+        send_args = replicator.send_args.take();
+
+        let mut entities_peer_list = world.resource_mut::<EntitiesPeerList>();
+
+        if let Some(entities) = entities_peer_list.0.get_mut(&peer_uuid){
+            entities.remove(&context.entity);
+
+            removed = true;
+
+            if entities.len() == 0 {
+                entities_peer_list.0.remove(&peer_uuid);
+            }
+        }
+    }
+
+    if removed {
+        world.write_message(ReplicatorRemoved{
+            entity: context.entity,
+            port_to_remove,
+            connection_id,
+            send_args
+        });
+    }
+}
+
+fn check_peers_left(
+    mut peers_dropped_server: MessageReader<PeersDroppedServer>,
+    mut entities_peer_list: ResMut<EntitiesPeerList>,
+    mut commands: Commands,
+){
+    for ev in peers_dropped_server.read() {
+        let peers = &ev.peers;
+
+        for (peer_uuid, _) in peers.values() {
+            if let Some(peer_uuid) = peer_uuid && let Some(entities) = entities_peer_list.0.get_mut(peer_uuid) {
+                for (entity,is_removing) in entities {
+                    if *is_removing { continue; }
+
+                    *is_removing = true;
+
+                    let entity = *entity;
+                    let peer_uuid = *peer_uuid;
+
+                    commands.queue(move |world: &mut World| {
+                        if let Some(replicator) = world.get_mut::<ServerReplicator>(entity)
+                        && replicator.destroy_when_owner_left
+                        {
+                            world.despawn(entity);
+                        }else {
+                            let mut entities_peer_list = world.resource_mut::<EntitiesPeerList>();
+
+                            if let Some(entities) = entities_peer_list.0.get_mut(&peer_uuid)
+                            && let Some(is_removing) = entities.get_mut(&entity)
+                            {
+                                *is_removing = false;
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn send_removed_to_peers(
+    mut replicator_removed: MessageReader<ReplicatorRemoved>,
+    mut server_connection_params: ServerConnectionParams
+){
+    for ev in replicator_removed.read() {
+        server_connection_params.send_message_for_all(ev.connection_id, ev.port_to_remove, SendEntityRemovedForClient{
+            entity: ev.entity,
+        },false,ev.send_args.as_ref(),vec![]);
     }
 }

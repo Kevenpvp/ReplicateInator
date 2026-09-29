@@ -64,7 +64,7 @@ fn send_hi_message(
 fn check_health_and_mana(
     query: Query<(Entity, &Health, &Mana), (With<Health>, With<Mana>)>,
 ){
-    for (entity, health, mana) in query.iter() {
+    for (_, health, mana) in query.iter() {
         println!("Health: {:?}", health);
         println!("Mana: {:?}", mana);
     }
