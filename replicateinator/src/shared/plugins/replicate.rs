@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use bevy::app::{App, Plugin};
 use bevy::asset::uuid::Uuid;
 use bevy::ecs::component::ComponentId;
-use bevy::prelude::{Component, Entity, EntityRef, PartialReflect, Reflect, Resource};
+use bevy::prelude::{Component, Entity, EntityRef, PartialReflect, Resource};
 use bevy::reflect::erased_serde::__private::serde::de::DeserializeOwned;
 use message_pro_macro::ConnectionMessage;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, NetworkType};
@@ -37,9 +37,6 @@ pub struct SendEntityRemovedForClient{
     pub entity: Entity
 }
 
-#[derive(Component,Serialize,Deserialize,Reflect)]
-pub struct Health;
-
 #[derive(Resource,Default)]
 pub struct ServerComponentRegistry(pub(crate) u32, pub(crate) HashMap<TypeId, u32>, pub(crate) HashMap<u32, ServerComponentData>, pub(crate) HashMap<ComponentId, u32>);
 
@@ -69,8 +66,6 @@ impl Plugin for ReplicateShared {
         if is_client {
             app.init_resource::<ClientComponentRegistry>();
         }
-
-        app.register_replication_component::<Health>();
     }
 }
 
@@ -111,7 +106,7 @@ impl ReplicationSharedTrait for App{
             }
 
             let new_index = server_component_registry.0 + 1;
-
+            
             server_component_registry.0 = new_index;
             server_component_registry.1.insert(type_id,new_index);
             server_component_registry.2.insert(new_index,ServerComponentData{
