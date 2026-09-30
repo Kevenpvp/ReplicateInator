@@ -106,7 +106,7 @@ impl ReplicationSharedTrait for App{
             }
 
             let new_index = server_component_registry.0 + 1;
-            
+
             server_component_registry.0 = new_index;
             server_component_registry.1.insert(type_id,new_index);
             server_component_registry.2.insert(new_index,ServerComponentData{
