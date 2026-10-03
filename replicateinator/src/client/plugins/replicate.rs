@@ -6,7 +6,7 @@ use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::ecs::world::DeferredWorld;
 use bevy::log::warn;
-use bevy::prelude::{Bundle, Commands, Component, Entity, First, FromReflect, IntoScheduleConfigs, MessageReader, PartialReflect, Plugin, Query, Resource, With, World};
+use bevy::prelude::{AppTypeRegistry, Bundle, Commands, Component, Entity, First, FromReflect, IntoScheduleConfigs, MessageReader, PartialReflect, Plugin, Query, ReflectComponent, Resource, With, World};
 use bevy::reflect::erased_serde::__private::serde::de::DeserializeOwned;
 use bevy::reflect::erased_serde::__private::serde::Serialize;
 use bevy::reflect::ReflectMut;
@@ -18,7 +18,7 @@ use crate::shared::plugins::replicate::{ClientComponentRegistry, ClientResourceD
 pub struct ReplicateClient;
 
 pub struct SystemDataFunctions{
-    pub replicated_spawned: fn(world: &mut World, entity: Entity),
+    pub replicated_spawned: fn(world: &mut World, entity: Entity, time: f64),
     pub type_id: TypeId
 }
 
@@ -28,7 +28,7 @@ pub trait RegisterClientReplicationSystem{
 }
 
 #[derive(Resource,Default)]
-pub struct ClientSystemRegistry(pub(crate) u32, pub(crate) HashMap<u32, SystemDataFunctions>, pub(crate) HashMap<TypeId, u32>);
+pub struct ClientSystemRegistry(pub u32, pub HashMap<u32, SystemDataFunctions>, pub HashMap<TypeId, u32>);
 
 #[derive(Resource,Default)]
 pub struct EntitiesServerRefs(pub(crate) HashMap<Entity, Entity>);
@@ -36,12 +36,57 @@ pub struct EntitiesServerRefs(pub(crate) HashMap<Entity, Entity>);
 #[derive(Component)]
 #[component(on_remove = replicated_removed)]
 pub struct Replicated{
-    bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
+    pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
     ref_server: Entity
 }
 
-pub trait ClientReplicationSystem: Default + Component + Sized{
+pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutability = Mutable> {
     type Components: Bundle + Default + FromReflect;
+
+    fn get_current_components(world: &World, entity: Entity) -> Option<Self::Components> {
+        let entity_ref = world.get_entity(entity).ok()?;
+        let type_registry = world.resource::<AppTypeRegistry>().read();
+
+        let mut bundle = Self::Components::default();
+
+        if let Some(type_info) = bundle.get_represented_type_info()
+            && let Some(reflect_comp) = type_registry.get_type_data::<ReflectComponent>(type_info.type_id())
+            && let Some(comp_reflect) = reflect_comp.reflect(entity_ref)
+        {
+            bundle.apply(comp_reflect);
+            return Some(bundle);
+        }
+
+        match bundle.reflect_mut() {
+            ReflectMut::Tuple(tuple_reflect) => {
+                for i in 0..tuple_reflect.field_len() {
+                    let field = tuple_reflect.field_mut(i).unwrap();
+
+                    if let Some(type_info) = field.get_represented_type_info()
+                        && let Some(reflect_comp) = type_registry.get_type_data::<ReflectComponent>(type_info.type_id())
+                        && let Some(comp_reflect) = reflect_comp.reflect(entity_ref)
+
+                    {
+                        field.apply(comp_reflect);
+                    }
+                }
+            }
+            ReflectMut::Struct(struct_reflect) => {
+                for i in 0..struct_reflect.field_len() {
+                    if let Some(field) = struct_reflect.field_at_mut(i)
+                        && let Some(type_info) = field.get_represented_type_info()
+                        && let Some(reflect_comp) = type_registry.get_type_data::<ReflectComponent>(type_info.type_id())
+                        && let Some(comp_reflect) = reflect_comp.reflect(entity_ref)
+                    {
+                        field.apply(comp_reflect);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        Some(bundle)
+    }
 
     fn bytes_to_partials(world: &mut World, components_bytes: HashMap<u32,Vec<u8>>) -> Vec<Box<dyn PartialReflect>> {
         let mut reflects: Vec<Box<dyn PartialReflect>> = Vec::new();
@@ -64,11 +109,11 @@ pub trait ClientReplicationSystem: Default + Component + Sized{
 
         if reflects.len() == 1 {
             let single_incoming = &reflects[0];
-            if let Some(info) = single_incoming.get_represented_type_info() {
-                if info.type_id() == TypeId::of::<Self::Components>() {
-                    bundle.apply(&**single_incoming);
-                    return bundle;
-                }
+            if let Some(info) = single_incoming.get_represented_type_info()
+                && info.type_id() == TypeId::of::<Self::Components>()
+            {
+                bundle.apply(&**single_incoming);
+                return bundle;
             }
         }
 
@@ -107,12 +152,19 @@ pub trait ClientReplicationSystem: Default + Component + Sized{
         }
     }
 
-    fn insert_on_unit_spawned(world: &mut World, entity: Entity) {
+    fn apply_replication_from_components(world: &mut World, entity: Entity, components: Self::Components) {
+        if let Ok(mut entity_mut) = world.get_entity_mut(entity) {
+            entity_mut.insert(components);
+        }
+    }
+
+    fn insert_on_unit_spawned(world: &mut World, entity: Entity, _spawned: f64) {
         let mut entity_mut = world.get_entity_mut(entity).unwrap();
 
         entity_mut.insert(Self::default());
     }
 
+    #[allow(clippy::type_complexity)]
     fn new_bytes_from_server(
         mut query: Query<(Entity, &Self, &mut Replicated), (With<Self>, With<Replicated>)>,
         mut commands: Commands,
@@ -179,11 +231,12 @@ fn bytes_from_server(
                     ref_server: entity_ref,
                 });
                 let entity = new_entity.id();
-                let current_entity = *&entity;
+                let current_entity = entity;
                 let replicated_spawned = system_data_functions.replicated_spawned;
+                let time = replicate_system_to_client_message.spawned;
 
                 commands.queue(move |world: &mut World| {
-                    replicated_spawned(world, current_entity);
+                    replicated_spawned(world, current_entity, time);
                 });
 
                 entities_server_refs.0.insert(entity_ref,entity);
@@ -206,7 +259,7 @@ impl RegisterClientReplicationSystem for App {
         let type_id = TypeId::of::<T>();
         let mut client_system_registry = self.world_mut().resource_mut::<ClientSystemRegistry>();
 
-        if client_system_registry.2.get(&type_id).is_some() {
+        if client_system_registry.2.contains_key(&type_id) {
             return;
         }
 
@@ -274,7 +327,7 @@ fn replicated_removed(
     mut world: DeferredWorld,
     context: HookContext
 ){
-    if let Some(ref_server) = world.get::<Replicated>(context.entity).map(|r| r.ref_server.clone()) {
+    if let Some(ref_server) = world.get::<Replicated>(context.entity).map(|r| r.ref_server) {
         let mut entities_server_refs = world.resource_mut::<EntitiesServerRefs>();
 
         entities_server_refs.0.remove(&ref_server);

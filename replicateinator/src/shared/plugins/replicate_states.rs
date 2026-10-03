@@ -6,7 +6,7 @@ use bevy::ecs::schedule::ScheduleLabel;
 use bevy::ecs::system::BoxedSystem;
 use bevy::prelude::{state_changed, IntoSystem, Plugin, Res, Resource, State, States, IntoScheduleConfigs, World, NextState, MessageReader, Commands, First};
 use bevy::state::state::FreelyMutableState;
-use message_pro_macro::ConnectionMessage;
+use networkinator::ConnectionMessage;
 use networkinator::NetRes;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, LocalPeerUUID, NetworkType};
 use serde::{Deserialize, Serialize};

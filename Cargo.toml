@@ -26,6 +26,5 @@ strip = "debuginfo"
 bevy = { version = "0.19.1" }
 log = { version = "0.4.34", features = ["max_level_debug", "release_max_level_warn"] }
 networkinator = { path = "../../Documents/GitHub/NetworkInator/networkinator" }
-message_pro_macro = { path = "../../Documents/GitHub/NetworkInator/message_pro_macro" }
 postcard = { version = "1.1.3" }
 serde = { version = "1.0.229" }

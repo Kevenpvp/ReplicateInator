@@ -6,7 +6,7 @@ use bevy::asset::uuid::Uuid;
 use bevy::ecs::component::ComponentId;
 use bevy::prelude::{Component, Entity, EntityRef, PartialReflect, Resource, World};
 use bevy::reflect::erased_serde::__private::serde::de::DeserializeOwned;
-use message_pro_macro::ConnectionMessage;
+use networkinator::ConnectionMessage;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, NetworkType};
 use serde::{Deserialize, Serialize};
 
@@ -38,9 +38,10 @@ pub trait ReplicationSharedTrait {
 #[derive(Serialize,Deserialize,ConnectionMessage)]
 pub struct ReplicateSystemToClient{
     pub owner: Option<Uuid>,
-    pub components_bytes:  HashMap<u32, Vec<u8>>,
+    pub components_bytes: HashMap<u32, Vec<u8>>,
     pub entity: Entity,
-    pub system_id: u32
+    pub system_id: u32,
+    pub spawned: f64
 }
 
 #[derive(Serialize,Deserialize,ConnectionMessage)]

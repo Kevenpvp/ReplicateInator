@@ -11,7 +11,6 @@ networkinator = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
 replication_pro_macro = { path = "../replication_pro_macro" }
-message_pro_macro = { workspace = true }
 
 [features]
 default = []

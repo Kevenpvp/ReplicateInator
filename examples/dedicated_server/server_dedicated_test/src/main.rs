@@ -10,7 +10,7 @@ pub mod not_wasm_uses {
     pub(crate) use bevy::app::{Update,PreUpdate};
     pub(crate) use bevy::prelude::{MessageReader, Startup, NextState, Resource};
     pub(crate) use serde::{Deserialize, Serialize};
-    pub(crate) use message_pro_macro::ConnectionMessage;
+    pub(crate) use networkinator::ConnectionMessage;
     pub(crate) use networkinator::NetResMut;
     pub(crate) use networkinator::server::plugins::network::ServerNetworkPlugin;
     pub(crate) use networkinator::server::ports::tcp::TcpServerSettings;

@@ -7,7 +7,7 @@ use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::ecs::system::BoxedSystem;
 use bevy::ecs::world::DeferredWorld;
-use bevy::prelude::{Added, Bundle, Changed, Commands, Component, Entity, IntoScheduleConfigs, IntoSystem, Last, Message, MessageReader, Or, Plugin, Query, Resource, Single, With, World};
+use bevy::prelude::{Added, Bundle, Changed, Commands, Component, Entity, IntoScheduleConfigs, IntoSystem, Last, Message, MessageReader, Or, Plugin, Query, Resource, Single, Time, With, World};
 use networkinator::NetRes;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, LocalPeerUUID, NetworkType};
 use serde::de::DeserializeOwned;
@@ -32,7 +32,12 @@ pub struct ServerReplicator{
     pub port_to_remove: u32,
     pub just_for_authenticated: bool,
     pub send_args: Option<SendArgs>,
-    pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
+    pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>
+}
+
+#[derive(Component)]
+pub struct ReplicatorInfos{
+    pub created: f64
 }
 
 #[derive(Message)]
@@ -40,7 +45,7 @@ pub struct ReplicatorRemoved{
     pub entity: Entity,
     pub port_to_remove: u32,
     pub connection_id: u32,
-    pub send_args: Option<SendArgs>,
+    pub send_args: Option<SendArgs>
 }
 
 #[derive(Resource,Default)]
@@ -113,22 +118,24 @@ pub trait ServerReplicationSystem: Component + Sized {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn replicate_to_client(
-        mut query: Query<(Entity, &Self, &mut ServerReplicator), (With<Self>, With<ServerReplicator>)>,
+        mut query: Query<(Entity, &Self, &mut ServerReplicator, &ReplicatorInfos), (With<Self>, With<ServerReplicator>, With<ReplicatorInfos>)>,
         mut server_connection_params: ServerConnectionParams,
         server_system_registry: NetRes<ServerSystemRegistry>,
         local_peer_uuid: Option<NetRes<LocalPeerUUID>>
     ){
         let type_id = TypeId::of::<Self>();
 
-        for (entity, _, mut server_replicator) in query.iter_mut() {
+        for (entity, _, mut server_replicator, replicator_infos) in query.iter_mut() {
             if let Some(current_queue) = server_replicator.bytes_queue.remove(&type_id) {
                 for components_bytes in current_queue {
                     server_connection_params.send_message_for_all(server_replicator.connection_id,server_replicator.port,ReplicateSystemToClient{
                         owner: server_replicator.owner,
                         components_bytes,
                         entity,
-                        system_id: *server_system_registry.2.get(&type_id).unwrap()
+                        system_id: *server_system_registry.2.get(&type_id).unwrap(),
+                        spawned: replicator_infos.created
                     }, server_replicator.just_for_authenticated, server_replicator.send_args.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
                 }
             }
@@ -163,7 +170,7 @@ impl RegisterServerReplicationSystem for App {
         let type_id = TypeId::of::<T>();
         let mut server_system_registry = self.world_mut().resource_mut::<ServerSystemRegistry>();
 
-        if server_system_registry.2.get(&type_id).is_some() {
+        if server_system_registry.2.contains_key(&type_id) {
             return;
         }
 
@@ -223,6 +230,8 @@ fn replicator_added(
     mut world: DeferredWorld,
     context: HookContext
 ){
+    let time = world.resource::<Time>().elapsed_secs_f64();
+
     if let Some(replicator) = world.get_mut::<ServerReplicator>(context.entity)
         && let Some(peer_uuid) = replicator.owner
     {
@@ -235,6 +244,10 @@ fn replicator_added(
                 [(context.entity,false)]
             ));
         }
+
+        world.commands().entity(context.entity).insert(ReplicatorInfos{
+            created: time,
+        });
     }
 }
 
@@ -261,7 +274,7 @@ fn replicator_removed(
 
             removed = true;
 
-            if entities.len() == 0 {
+            if entities.is_empty() {
                 entities_peer_list.0.remove(&peer_uuid);
             }
         }
@@ -289,6 +302,7 @@ fn send_removed_to_peers(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn default_resource_changed<T: ServerResourceReplicationSystem>(
     query: Single<&T, Or<(Changed<T>, Added<T>)>>,
     mut server_connection_params: ServerConnectionParams,

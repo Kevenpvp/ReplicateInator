@@ -9,6 +9,5 @@ bevy = { workspace = true }
 networkinator = { workspace = true }
 serde = { workspace = true }
 postcard = { workspace = true }
-message_pro_macro = { workspace = true }
 replicateinator = { path = "../../../replicateinator" }
 replication_pro_macro = { path = "../../../replication_pro_macro" }

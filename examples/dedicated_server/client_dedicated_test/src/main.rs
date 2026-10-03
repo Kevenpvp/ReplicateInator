@@ -5,7 +5,7 @@ use networkinator::shared::plugins::messaging::{ClientConnectionParams, MessageT
 use bevy::DefaultPlugins;
 use bevy::prelude::{Added, App, AppExtStates, Changed, Component, Entity, IntoScheduleConfigs, MessageReader, OnEnter, Or, PostUpdate, Query, Reflect, Res, Resource, Single, Startup, State, States, Update};
 use serde::{Deserialize, Serialize};
-use message_pro_macro::ConnectionMessage;
+use networkinator::ConnectionMessage;
 #[cfg(not(target_arch = "wasm32"))]
 use networkinator::client::ports::tcp::TcpClientSettings;
 #[cfg(not(target_arch = "wasm32"))]
@@ -74,6 +74,7 @@ fn send_hi_message(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn check_health_and_mana(
     query: Query<(Entity, &Health, &Mana), (Added<Health>, Added<Mana>)>,
 ){
@@ -89,6 +90,7 @@ pub fn check_state_changed(
     println!("State: {:?}", state.get());
 }
 
+#[allow(clippy::type_complexity)]
 pub fn check_resource_changed(
     query: Single<&TestResource, Or<(Changed<TestResource>, Added<TestResource>)>>,
 ){
