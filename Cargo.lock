@@ -2010,7 +2010,7 @@ name = "client_dedicated_test"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "message_pro_macro 0.1.8",
+ "message_pro_macro 0.2.0",
  "networkinator",
  "postcard",
  "replicateinator",
@@ -3554,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "message_pro_macro"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "postcard",
  "proc-macro2",
@@ -3679,7 +3679,7 @@ dependencies = [
 
 [[package]]
 name = "networkinator"
-version = "0.1.8"
+version = "0.2.0"
 dependencies = [
  "bevy",
  "erased-serde",
@@ -4654,7 +4654,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "log",
- "message_pro_macro 0.1.8",
+ "message_pro_macro 0.2.0",
  "networkinator",
  "postcard",
  "replication_pro_macro",
@@ -4848,7 +4848,7 @@ name = "server_dedicated_test"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "message_pro_macro 0.1.8",
+ "message_pro_macro 0.2.0",
  "networkinator",
  "postcard",
  "replicateinator",

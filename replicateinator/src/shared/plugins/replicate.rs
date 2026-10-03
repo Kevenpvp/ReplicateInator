@@ -1,10 +1,10 @@
-use networkinator::shared::plugins::messaging::{MessageTrait, MessageTraitPlugin};
+use networkinator::shared::plugins::messaging::{MessageTrait, MessageTraitPlugin, SendArgs};
 use std::any::{TypeId};
 use std::collections::HashMap;
 use bevy::app::{App, Plugin};
 use bevy::asset::uuid::Uuid;
 use bevy::ecs::component::ComponentId;
-use bevy::prelude::{Component, Entity, EntityRef, PartialReflect, Resource};
+use bevy::prelude::{Component, Entity, EntityRef, PartialReflect, Resource, World};
 use bevy::reflect::erased_serde::__private::serde::de::DeserializeOwned;
 use message_pro_macro::ConnectionMessage;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, NetworkType};
@@ -18,6 +18,17 @@ pub struct ClientComponentData{
 
 pub struct ServerComponentData {
     pub serialize_fn: fn(EntityRef) -> Option<Vec<u8>>
+}
+
+pub struct ServerResourceData {
+    pub connection_id: u32,
+    pub port_id: u32,
+    pub send_args: Option<SendArgs>,
+    pub just_authenticated: bool
+}
+
+pub struct ClientResourceData{
+    pub new_bytes_from_server: fn(bytes: Vec<u8>, world: &mut World)
 }
 
 pub trait ReplicationSharedTrait {
@@ -37,16 +48,29 @@ pub struct SendEntityRemovedForClient{
     pub entity: Entity
 }
 
+#[derive(Serialize,Deserialize,ConnectionMessage)]
+pub struct SendResourceReplicatedForClient{
+    pub resource_id: u32,
+    pub resource_bytes: Vec<u8>
+}
+
 #[derive(Resource,Default)]
 pub struct ServerComponentRegistry(pub(crate) u32, pub(crate) HashMap<TypeId, u32>, pub(crate) HashMap<u32, ServerComponentData>, pub(crate) HashMap<ComponentId, u32>);
 
 #[derive(Resource,Default)]
+pub struct ServerResourceRegistry(pub(crate) u32, pub(crate) HashMap<TypeId,u32>, pub(crate) HashMap<u32, ServerResourceData>);
+
+#[derive(Resource,Default)]
 pub struct ClientComponentRegistry(pub(crate) u32, pub(crate) HashMap<TypeId, u32>, pub(crate) HashMap<u32, ClientComponentData>, pub(crate) HashMap<ComponentId, u32>);
+
+#[derive(Resource,Default)]
+pub struct ClientResourceRegistry(pub(crate) u32, pub(crate) HashMap<TypeId,u32>, pub(crate) HashMap<u32,ClientResourceData>);
 
 impl Plugin for ReplicateShared {
     fn build(&self, app: &mut App) {
         app.register_message::<ReplicateSystemToClient>();
         app.register_message::<SendEntityRemovedForClient>();
+        app.register_message::<SendResourceReplicatedForClient>();
 
         let (is_client, is_local_server, is_dedicated_server) = {
             let world = app.world_mut();
@@ -61,10 +85,12 @@ impl Plugin for ReplicateShared {
 
         if is_local_server || is_dedicated_server {
             app.init_resource::<ServerComponentRegistry>();
+            app.init_resource::<ServerResourceRegistry>();
         }
 
         if is_client {
             app.init_resource::<ClientComponentRegistry>();
+            app.init_resource::<ClientResourceRegistry>();
         }
     }
 }

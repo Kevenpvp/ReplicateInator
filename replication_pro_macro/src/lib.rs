@@ -65,3 +65,59 @@ pub fn derive_server_replication_system(input: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+#[proc_macro_derive(ServerStateReplicationSystem)]
+pub fn derive_server_state_replication_system(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = input.ident;
+
+    let expanded = quote! {
+        impl ServerStateSystem for #struct_name {
+
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro_derive(ClientStateReplicationSystem)]
+pub fn derive_client_state_replication_system(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = input.ident;
+
+    let expanded = quote! {
+        impl ClientStateSystem for #struct_name {
+
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro_derive(ServerResourceReplicationSystem)]
+pub fn derive_server_resoure_replication_system(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = input.ident;
+
+    let expanded = quote! {
+        impl ServerResourceReplicationSystem for #struct_name {
+
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+#[proc_macro_derive(ClientResourceReplicationSystem)]
+pub fn derive_client_resoure_replication_system(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let struct_name = input.ident;
+
+    let expanded = quote! {
+        impl ClientResourceReplicationSystem for #struct_name {
+
+        }
+    };
+
+    TokenStream::from(expanded)
+}

@@ -5,15 +5,20 @@ use bevy::app::App;
 use bevy::asset::uuid::Uuid;
 use bevy::ecs::lifecycle::HookContext;
 use bevy::ecs::schedule::ScheduleLabel;
+use bevy::ecs::system::BoxedSystem;
 use bevy::ecs::world::DeferredWorld;
-use bevy::prelude::{Bundle, Commands, Component, Entity, IntoScheduleConfigs, Last, Message, MessageReader, Plugin, Query, Res, ResMut, Resource, With, World};
-use networkinator::server::plugins::network::PeersDroppedServer;
-use crate::shared::plugins::replicate::{ReplicateSystemToClient, SendEntityRemovedForClient, ServerComponentRegistry};
+use bevy::prelude::{Added, Bundle, Changed, Commands, Component, Entity, IntoScheduleConfigs, IntoSystem, Last, Message, MessageReader, Or, Plugin, Query, Resource, Single, With, World};
+use networkinator::NetRes;
+use networkinator::shared::plugins::network::{CurrentNetworkSides, LocalPeerUUID, NetworkType};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use crate::shared::plugins::replicate::{ReplicateSystemToClient, SendEntityRemovedForClient, SendResourceReplicatedForClient, ServerComponentRegistry, ServerResourceData, ServerResourceRegistry};
 
 pub struct ReplicateServer;
 
 pub trait RegisterServerReplicationSystem{
     fn register_server_replication_system<T: ServerReplicationSystem>(&mut self, schedule: impl ScheduleLabel);
+    fn register_server_replication_resource<T: ServerResourceReplicationSystem>(&mut self, schedule: impl ScheduleLabel, server_resource_data: ServerResourceData);
 }
 
 #[allow(dead_code)]
@@ -25,7 +30,6 @@ pub struct ServerReplicator{
     pub connection_id: u32,
     pub port: u32,
     pub port_to_remove: u32,
-    pub destroy_when_owner_left: bool,
     pub just_for_authenticated: bool,
     pub send_args: Option<SendArgs>,
     pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
@@ -45,6 +49,15 @@ pub struct ServerSystemRegistry(pub(crate) u32, pub(crate) HashMap<u32, TypeId>,
 #[derive(Resource,Default)]
 pub struct EntitiesPeerList(pub(crate) HashMap<Uuid,HashMap<Entity,bool>>);
 
+pub trait ServerResourceReplicationSystem: Resource + Serialize + DeserializeOwned {
+    fn serialize_resource(&self) -> Vec<u8> {
+        postcard::to_allocvec(&self).unwrap()
+    }
+
+    fn on_resource_changed() -> BoxedSystem<(), ()> {
+        Box::new(IntoSystem::into_system(default_resource_changed::<Self>))
+    }
+}
 
 pub trait ServerReplicationSystem: Component + Sized {
     type Components: Bundle;
@@ -97,14 +110,14 @@ pub trait ServerReplicationSystem: Component + Sized {
 
                 replicator.bytes_queue.insert(type_id, current_queue);
             }
-
         }
     }
 
     fn replicate_to_client(
         mut query: Query<(Entity, &Self, &mut ServerReplicator), (With<Self>, With<ServerReplicator>)>,
         mut server_connection_params: ServerConnectionParams,
-        server_system_registry: Res<ServerSystemRegistry>,
+        server_system_registry: NetRes<ServerSystemRegistry>,
+        local_peer_uuid: Option<NetRes<LocalPeerUUID>>
     ){
         let type_id = TypeId::of::<Self>();
 
@@ -116,7 +129,7 @@ pub trait ServerReplicationSystem: Component + Sized {
                         components_bytes,
                         entity,
                         system_id: *server_system_registry.2.get(&type_id).unwrap()
-                    }, server_replicator.just_for_authenticated, server_replicator.send_args.as_ref(), vec![]);
+                    }, server_replicator.just_for_authenticated, server_replicator.send_args.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
                 }
             }
         }
@@ -162,6 +175,39 @@ impl RegisterServerReplicationSystem for App {
 
         self.add_systems(schedule,(T::check_update,T::replicate_to_client).chain());
     }
+
+    fn register_server_replication_resource<T: ServerResourceReplicationSystem>(&mut self, schedule: impl ScheduleLabel, server_resource_data: ServerResourceData) {
+        let type_id = TypeId::of::<T>();
+
+        let (is_local_server, is_dedicated_server) = {
+            let world = self.world_mut();
+            let mut sides = world.get_resource_mut::<CurrentNetworkSides>()
+                .expect("Insert ServerNetworkPlugin");
+            (
+                sides.side().contains(&NetworkType::LocalServer),
+                sides.side().contains(&NetworkType::DedicatedServer)
+            )
+        };
+
+        if !is_local_server && !is_dedicated_server {
+            return;
+        }
+
+        let world_mut = self.world_mut();
+        let mut server_resource_registry = world_mut.resource_mut::<ServerResourceRegistry>();
+
+        if server_resource_registry.1.contains_key(&type_id) {
+            return;
+        }
+
+        let new_index = server_resource_registry.0 + 1;
+
+        server_resource_registry.0 = new_index;
+        server_resource_registry.1.insert(type_id,new_index);
+        server_resource_registry.2.insert(new_index,server_resource_data);
+
+        self.add_systems(schedule,T::on_resource_changed());
+    }
 }
 
 impl Plugin for ReplicateServer {
@@ -169,7 +215,7 @@ impl Plugin for ReplicateServer {
         app.add_message::<ReplicatorRemoved>();
         app.init_resource::<EntitiesPeerList>();
         app.init_resource::<ServerSystemRegistry>();
-        app.add_systems(Last,(check_peers_left,send_removed_to_peers).chain());
+        app.add_systems(Last,send_removed_to_peers);
     }
 }
 
@@ -231,52 +277,32 @@ fn replicator_removed(
     }
 }
 
-fn check_peers_left(
-    mut peers_dropped_server: MessageReader<PeersDroppedServer>,
-    mut entities_peer_list: ResMut<EntitiesPeerList>,
-    mut commands: Commands,
-){
-    for ev in peers_dropped_server.read() {
-        let peers = &ev.peers;
-
-        for (peer_uuid, _) in peers.values() {
-            if let Some(peer_uuid) = peer_uuid && let Some(entities) = entities_peer_list.0.get_mut(peer_uuid) {
-                for (entity,is_removing) in entities {
-                    if *is_removing { continue; }
-
-                    *is_removing = true;
-
-                    let entity = *entity;
-                    let peer_uuid = *peer_uuid;
-
-                    commands.queue(move |world: &mut World| {
-                        if let Some(replicator) = world.get_mut::<ServerReplicator>(entity)
-                        && replicator.destroy_when_owner_left
-                        {
-                            world.despawn(entity);
-                        }else {
-                            let mut entities_peer_list = world.resource_mut::<EntitiesPeerList>();
-
-                            if let Some(entities) = entities_peer_list.0.get_mut(&peer_uuid)
-                            && let Some(is_removing) = entities.get_mut(&entity)
-                            {
-                                *is_removing = false;
-                            }
-                        }
-                    });
-                }
-            }
-        }
-    }
-}
-
 fn send_removed_to_peers(
     mut replicator_removed: MessageReader<ReplicatorRemoved>,
-    mut server_connection_params: ServerConnectionParams
+    mut server_connection_params: ServerConnectionParams,
+    local_peer_uuid: Option<NetRes<LocalPeerUUID>>
 ){
     for ev in replicator_removed.read() {
         server_connection_params.send_message_for_all(ev.connection_id, ev.port_to_remove, SendEntityRemovedForClient{
             entity: ev.entity,
-        },false,ev.send_args.as_ref(),vec![]);
+        },false,ev.send_args.as_ref(),if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
+    }
+}
+
+fn default_resource_changed<T: ServerResourceReplicationSystem>(
+    query: Single<&T, Or<(Changed<T>, Added<T>)>>,
+    mut server_connection_params: ServerConnectionParams,
+    server_resource_registry: NetRes<ServerResourceRegistry>,
+    local_peer_uuid: Option<NetRes<LocalPeerUUID>>
+){
+    let type_id = TypeId::of::<T>();
+
+    if let Some(id) = server_resource_registry.1.get(&type_id)
+    && let Some(server_resource_data) = server_resource_registry.2.get(id)
+    {
+        server_connection_params.send_message_for_all(server_resource_data.connection_id, server_resource_data.port_id, SendResourceReplicatedForClient{
+            resource_id: *id,
+            resource_bytes: query.serialize_resource(),
+        }, server_resource_data.just_authenticated, server_resource_data.send_args.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
     }
 }

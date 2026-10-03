@@ -1,16 +1,14 @@
-use replicateinator::server::plugins::replicate::{RegisterServerReplicationSystem, ReplicateServer, ServerReplicationSystem, ServerReplicator};
-use bevy::prelude::{App, Commands, Component, Last, PostUpdate, Reflect};
+use bevy::prelude::{App};
 pub(crate) use bevy::DefaultPlugins;
 
 #[cfg(target_arch = "wasm32")]
 use bevy::log::warn;
-use networkinator::shared::plugins::authentication::ClientAuthenticatedOnServer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod not_wasm_uses {
     pub(crate) use networkinator::shared::plugins::messaging::{MessageReceivedFromPeer, MessageTrait, MessageTraitPlugin, MessagingPlugin};
-    pub(crate) use bevy::app::Update;
-    pub(crate) use bevy::prelude::{MessageReader, Startup};
+    pub(crate) use bevy::app::{Update,PreUpdate};
+    pub(crate) use bevy::prelude::{MessageReader, Startup, NextState, Resource};
     pub(crate) use serde::{Deserialize, Serialize};
     pub(crate) use message_pro_macro::ConnectionMessage;
     pub(crate) use networkinator::NetResMut;
@@ -18,13 +16,23 @@ pub mod not_wasm_uses {
     pub(crate) use networkinator::server::ports::tcp::TcpServerSettings;
     pub(crate) use networkinator::server::ports::udp::UdpServerSettings;
     pub(crate) use networkinator::shared::plugins::authentication::AuthenticationPlugin;
-    pub(crate)use networkinator::shared::plugins::network::{DefaultNetworkPortSharedInfosServer, NetworkConnection, NetworkPlugin, ServerConnection};
+    pub(crate) use networkinator::shared::plugins::network::{DefaultNetworkPortSharedInfosServer, NetworkConnection, NetworkPlugin, ServerConnection};
+    pub(crate) use replicateinator::shared::plugins::replicate::{ReplicateShared, ReplicationSharedTrait};
+    pub(crate) use replication_pro_macro::{ServerReplicationSystem, ServerStateReplicationSystem};
+    pub(crate) use networkinator::shared::plugins::authentication::ClientAuthenticatedOnServer;
+    pub(crate) use replicateinator::shared::plugins::replicate_states::ServerStateSystem;
+    pub(crate) use replicateinator::server::plugins::replicate::{RegisterServerReplicationSystem, ReplicateServer, ServerReplicationSystem, ServerReplicator};
+    pub(crate) use bevy::prelude::{Commands, Component, Last, PostUpdate, Reflect, States, AppExtStates};
+    pub(crate) use replicateinator::shared::plugins::replicate_states::ReplicateStates;
+    pub(crate) use replicateinator::shared::plugins::replicate_states::ReplicatedStateSharedTrait;
+    pub(crate) use replicateinator::server::plugins::replicate::ServerResourceReplicationSystem;
+    pub(crate) use replication_pro_macro::ServerResourceReplicationSystem;
+    pub(crate) use replicateinator::shared::plugins::replicate::ServerResourceData;
+    pub(crate) use replicateinator::shared::plugins::replicate_states::ServerStatesData;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 use not_wasm_uses::*;
-use replicateinator::shared::plugins::replicate::{ReplicateShared, ReplicationSharedTrait};
-use replication_pro_macro::ServerReplicationSystem;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize,Deserialize,ConnectionMessage)]
@@ -63,9 +71,12 @@ fn read_hi_message(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn client_authenticated(
     mut client_authenticated_on_server: MessageReader<ClientAuthenticatedOnServer>,
     mut commands: Commands,
+    mut change_state: NetResMut<NextState<NormalStates>>,
+    mut test_resource: NetResMut<TestResource>
 ){
     for ev in client_authenticated_on_server.read() {
         if ev.connection_id != 0 { continue; }
@@ -76,7 +87,6 @@ fn client_authenticated(
             connection_id: 0,
             port: 0,
             port_to_remove: 0,
-            destroy_when_owner_left: true,
             just_for_authenticated: true,
             send_args: None,
             bytes_queue: Default::default(),
@@ -87,21 +97,50 @@ fn client_authenticated(
             mana: 20.0,
             max_mana: 25.0,
         }));
+
+        change_state.set(NormalStates::Go);
+        test_resource.0 = 10
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(ServerStateReplicationSystem, Default, States, Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub enum NormalStates{
+    #[default]
+    Paused,
+    Go
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource ,Serialize, Deserialize, Default, ServerResourceReplicationSystem)]
+pub struct TestResource(pub u32);
 
 fn main() {
     let mut app = App::new();
 
     #[cfg(not(target_arch = "wasm32"))] {
-        app.add_plugins((DefaultPlugins,ServerNetworkPlugin,NetworkPlugin,MessagingPlugin,AuthenticationPlugin,ReplicateShared,ReplicateServer));
+        app.add_plugins((DefaultPlugins,ServerNetworkPlugin,NetworkPlugin,MessagingPlugin,AuthenticationPlugin,ReplicateShared,ReplicateServer,ReplicateStates));
+        app.init_resource::<TestResource>();
         app.add_systems(Startup,start_connection);
         app.add_systems(Update,read_hi_message);
         app.add_systems(PostUpdate,client_authenticated);
         app.register_message::<HiMessage>();
+        app.init_state::<NormalStates>();
+        app.register_server_replication_state::<NormalStates>(Update,ServerStatesData{
+            connection_id: 0,
+            port_id: 0,
+            send_args: None,
+            just_authenticated: true
+        });
         app.register_replication_component::<Health>();
         app.register_replication_component::<Mana>();
         app.register_server_replication_system::<DefaultManaHealthSystem>(Last);
+        app.register_server_replication_resource::<TestResource>(PreUpdate,ServerResourceData{
+            connection_id: 0,
+            port_id: 0,
+            send_args: None,
+            just_authenticated: true
+        });
     }
 
     #[cfg(target_arch = "wasm32")] {
