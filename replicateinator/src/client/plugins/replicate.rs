@@ -37,7 +37,9 @@ pub struct EntitiesServerRefs(pub(crate) HashMap<Entity, Entity>);
 #[component(on_remove = replicated_removed)]
 pub struct Replicated{
     pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
-    ref_server: Entity
+    ref_server: Entity,
+    pub connection_id: u32,
+    pub port_id: u32
 }
 
 pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutability = Mutable> {
@@ -229,6 +231,8 @@ fn bytes_from_server(
                         (system_data_functions.type_id,new_vec_dequeue)
                     ]),
                     ref_server: entity_ref,
+                    connection_id: ev.connection_id,
+                    port_id: ev.port_id
                 });
                 let entity = new_entity.id();
                 let current_entity = entity;
@@ -337,7 +341,7 @@ fn replicated_removed(
 fn resources_bytes_from_server(
     mut send_resource_replicated_for_client: MessageReader<MessageReceivedFromServer<SendResourceReplicatedForClient>>,
     client_resource_registry: NetRes<ClientResourceRegistry>,
-    mut commands: Commands,
+    mut commands: Commands
 ){
     for ev in send_resource_replicated_for_client.read() {
         let send_resource_replicated_for_client_message = &ev.message;
