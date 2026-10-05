@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use bevy::app::{App, Plugin};
 use bevy::asset::uuid::Uuid;
 use bevy::ecs::component::ComponentId;
-use bevy::prelude::{Component, Entity, EntityRef, PartialReflect, Resource, World};
+use bevy::prelude::{Component, Entity, PartialReflect, Reflect, Resource, World};
 use bevy::reflect::erased_serde::__private::serde::de::DeserializeOwned;
 use networkinator::ConnectionMessage;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, NetworkType};
@@ -17,7 +17,7 @@ pub struct ClientComponentData{
 }
 
 pub struct ServerComponentData {
-    pub serialize_fn: fn(EntityRef) -> Option<Vec<u8>>
+    pub serialize_fn: fn(&dyn Reflect) -> Option<Vec<u8>>
 }
 
 pub struct ServerResourceData {
@@ -32,16 +32,23 @@ pub struct ClientResourceData{
 }
 
 pub trait ReplicationSharedTrait {
-    fn register_replication_component<T: Component + DeserializeOwned + PartialReflect + Serialize>(&mut self);
+    fn register_replication_component<T: Component + DeserializeOwned + PartialReflect + Serialize + std::fmt::Debug>(&mut self);
 }
 
 #[derive(Serialize,Deserialize,ConnectionMessage)]
 pub struct ReplicateSystemToClient{
+    pub components_bytes: HashMap<u32, Vec<u8>>,
+    pub entity: Entity,
+    pub system_id: u32
+}
+
+#[derive(Serialize,Deserialize,ConnectionMessage)]
+pub struct ReplicateSystemSpawnedToClient{
     pub owner: Option<Uuid>,
     pub components_bytes: HashMap<u32, Vec<u8>>,
     pub entity: Entity,
     pub system_id: u32,
-    pub spawned: f64
+    pub time: f64
 }
 
 #[derive(Serialize,Deserialize,ConnectionMessage)]
@@ -70,6 +77,7 @@ pub struct ClientResourceRegistry(pub(crate) u32, pub(crate) HashMap<TypeId,u32>
 impl Plugin for ReplicateShared {
     fn build(&self, app: &mut App) {
         app.register_message::<ReplicateSystemToClient>();
+        app.register_message::<ReplicateSystemSpawnedToClient>();
         app.register_message::<SendEntityRemovedForClient>();
         app.register_message::<SendResourceReplicatedForClient>();
 
@@ -102,14 +110,14 @@ pub fn default_deserialize_component<T:Component + DeserializeOwned + PartialRef
     Box::new(component)
 }
 
-pub fn default_serialize_component_fn<T: Component + Serialize>(entity_ref: EntityRef) -> Option<Vec<u8>> {
-    let component = entity_ref.get::<T>()?;
-
+pub fn default_serialize_component_fn<T: Component + Serialize + std::fmt::Debug>(reflect: &dyn Reflect) -> Option<Vec<u8>> {
+    let component = reflect.downcast_ref::<T>()?;
+    
     postcard::to_allocvec(component).ok()
 }
 
 impl ReplicationSharedTrait for App{
-    fn register_replication_component<T: Component + DeserializeOwned + PartialReflect + Serialize>(&mut self) {
+    fn register_replication_component<T: Component + DeserializeOwned + PartialReflect + Serialize + std::fmt::Debug>(&mut self) {
         let type_id = TypeId::of::<T>();
 
         let (is_client, is_local_server, is_dedicated_server) = {

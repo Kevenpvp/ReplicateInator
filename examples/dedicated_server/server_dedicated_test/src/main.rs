@@ -1,8 +1,9 @@
 use bevy::prelude::{App};
 pub(crate) use bevy::DefaultPlugins;
-
 #[cfg(target_arch = "wasm32")]
 use bevy::log::warn;
+use bevy::utils::default;
+use networkinator::NetRes;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod not_wasm_uses {
@@ -33,18 +34,19 @@ pub mod not_wasm_uses {
 
 #[cfg(not(target_arch = "wasm32"))]
 use not_wasm_uses::*;
+use replicateinator::shared::plugins::replicate::ServerComponentRegistry;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize,Deserialize,ConnectionMessage)]
 pub struct HiMessage(String);
 
-#[derive(Component,Serialize,Deserialize,Reflect)]
+#[derive(Component,Serialize,Deserialize,Reflect,Debug)]
 pub struct Health{
     health: f32,
     max_health: f32,
 }
 
-#[derive(Component,Serialize,Deserialize,Reflect)]
+#[derive(Component,Serialize,Deserialize,Reflect,Debug)]
 pub struct Mana{
     mana: f32,
     max_mana: f32,
@@ -53,6 +55,10 @@ pub struct Mana{
 #[derive(Component,ServerReplicationSystem)]
 #[replication(Health, Mana)]
 pub struct DefaultManaHealthSystem;
+
+#[derive(Component)]
+pub struct TestSystem;
+
 
 #[cfg(not(target_arch = "wasm32"))]
 fn start_connection(
@@ -85,15 +91,19 @@ fn client_authenticated(
             owner: Some(ev.peer_uuid),
             replication_owner: None,
             connection_id: 0,
-            port: 0,
+            port: 1,
             port_to_remove: 0,
+            port_to_spawn: 0,
             just_for_authenticated: true,
-            send_args: None,
+            send_args_to_remove: None,
+            send_args_to_replicate: None,
             bytes_queue: Default::default(),
-        },DefaultManaHealthSystem, Health{
+            send_args_to_spawn: None,
+            ..default()
+        }, DefaultManaHealthSystem, Health{
             health: 10.0,
             max_health: 10.0,
-        },Mana{
+        }, Mana{
             mana: 20.0,
             max_mana: 25.0,
         }));
