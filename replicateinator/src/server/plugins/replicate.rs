@@ -1,6 +1,6 @@
 use std::any::TypeId;
 use networkinator::shared::plugins::messaging::{SendArgs, ServerConnectionParams};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap};
 use bevy::app::App;
 use bevy::asset::uuid::Uuid;
 use bevy::ecs::bundle::BundleId;
@@ -49,8 +49,8 @@ pub struct ServerReplicator{
     pub send_args_to_remove: Option<SendArgs>,
     pub send_args_to_replicate: Option<SendArgs>,
     pub send_args_to_spawn: Option<SendArgs>,
-    pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
-    pub bytes_spawned_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>
+    pub bytes_replicate: HashMap<TypeId, HashMap<u32, Vec<u8>>>,
+    pub bytes_replicate_spawned: HashMap<TypeId, HashMap<u32, Vec<u8>>>
 }
 
 #[derive(Message)]
@@ -96,24 +96,16 @@ pub trait ServerReplicationSystem: Component + Sized + Component<Mutability = Mu
         let type_id = TypeId::of::<Self>();
 
         if spawned {
-            if let Some(current_spawned_queue) = replicator.bytes_spawned_queue.get_mut(&type_id) {
-                current_spawned_queue.push_back(components_bytes);
+            if let Some(bytes_replicate_spawned) = replicator.bytes_replicate_spawned.get_mut(&type_id) {
+                *bytes_replicate_spawned = components_bytes;
             }else {
-                let mut current_spawned_queue = VecDeque::new();
-
-                current_spawned_queue.push_back(components_bytes);
-
-                replicator.bytes_spawned_queue.insert(type_id, current_spawned_queue);
+                replicator.bytes_replicate_spawned.insert(type_id, components_bytes);
             }
         }else {
-            if let Some(current_queue) = replicator.bytes_queue.get_mut(&type_id) {
-                current_queue.push_back(components_bytes);
+            if let Some(bytes_replicate) = replicator.bytes_replicate.get_mut(&type_id) {
+                *bytes_replicate = components_bytes;
             }else {
-                let mut current_queue = VecDeque::new();
-
-                current_queue.push_back(components_bytes);
-
-                replicator.bytes_queue.insert(type_id, current_queue);
+                replicator.bytes_replicate.insert(type_id, components_bytes);
             }
         }
     }
@@ -130,26 +122,22 @@ pub trait ServerReplicationSystem: Component + Sized + Component<Mutability = Mu
         let system_id = *server_system_registry.2.get(&type_id).unwrap();
 
         for (entity, _, mut server_replicator) in query.iter_mut() {
-            if let Some(current_spawned_queue) = server_replicator.bytes_spawned_queue.remove(&type_id) {
-                for components_bytes in current_spawned_queue {
-                    server_connection_params.send_message_for_all(server_replicator.connection_id,server_replicator.port_to_spawn,ReplicateSystemSpawnedToClient{
-                        owner: server_replicator.owner,
-                        components_bytes,
-                        entity,
-                        system_id,
-                        time: time.delta_secs_f64(),
-                    }, server_replicator.just_for_authenticated, server_replicator.send_args_to_spawn.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
-                }
+            if let Some(components_bytes) = server_replicator.bytes_replicate_spawned.remove(&type_id) {
+                server_connection_params.send_message_for_all(server_replicator.connection_id,server_replicator.port_to_spawn,ReplicateSystemSpawnedToClient{
+                    owner: server_replicator.owner,
+                    components_bytes,
+                    entity,
+                    system_id,
+                    time: time.delta_secs_f64(),
+                }, server_replicator.just_for_authenticated, server_replicator.send_args_to_spawn.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
             }
 
-            if let Some(current_queue) = server_replicator.bytes_queue.remove(&type_id) {
-                for components_bytes in current_queue {
-                    server_connection_params.send_message_for_all(server_replicator.connection_id,server_replicator.port,ReplicateSystemToClient{
-                        components_bytes,
-                        entity,
-                        system_id,
-                    }, server_replicator.just_for_authenticated, server_replicator.send_args_to_replicate.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
-                }
+            if let Some(components_bytes) = server_replicator.bytes_replicate.remove(&type_id) {
+                server_connection_params.send_message_for_all(server_replicator.connection_id,server_replicator.port,ReplicateSystemToClient{
+                    components_bytes,
+                    entity,
+                    system_id,
+                }, server_replicator.just_for_authenticated, server_replicator.send_args_to_replicate.as_ref(), if let Some(local_peer_uuid) = &local_peer_uuid && let Some(local_peer_uuid) = local_peer_uuid.get_peer_uuid() {vec![local_peer_uuid]} else { vec![] } );
             }
         }
     }

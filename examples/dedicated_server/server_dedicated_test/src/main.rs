@@ -97,7 +97,6 @@ fn client_authenticated(
             just_for_authenticated: true,
             send_args_to_remove: None,
             send_args_to_replicate: None,
-            bytes_queue: Default::default(),
             send_args_to_spawn: None,
             ..default()
         }, DefaultManaHealthSystem, Health{
