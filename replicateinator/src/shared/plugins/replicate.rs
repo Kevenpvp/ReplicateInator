@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct ReplicateShared;
 
 pub struct ClientComponentData{
-    pub deserialize_fn: fn(bytes: &Vec<u8>) -> Box<dyn PartialReflect>
+    pub deserialize_fn: fn(bytes: &[u8]) -> Box<dyn PartialReflect>
 }
 
 pub struct ServerComponentData {
@@ -100,7 +100,7 @@ impl Plugin for ReplicateShared {
     }
 }
 
-pub fn default_deserialize_component<T:Component + DeserializeOwned + PartialReflect>(bytes: &Vec<u8>) -> Box<dyn PartialReflect> {
+pub fn default_deserialize_component<T:Component + DeserializeOwned + PartialReflect>(bytes: &[u8]) -> Box<dyn PartialReflect> {
     let component = postcard::from_bytes::<T>(bytes).expect("Failed to deserialize ServerComponent");
 
     Box::new(component)

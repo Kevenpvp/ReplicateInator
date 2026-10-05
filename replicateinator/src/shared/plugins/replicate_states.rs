@@ -48,7 +48,7 @@ pub trait ServerStateSystem: Serialize + DeserializeOwned + States {
 }
 
 pub trait ClientStateSystem: Serialize + DeserializeOwned + States + FreelyMutableState {
-    fn deserialize_state(bytes: &Vec<u8>) -> Self {
+    fn deserialize_state(bytes: &[u8]) -> Self {
         postcard::from_bytes::<Self>(bytes).unwrap()
     }
 

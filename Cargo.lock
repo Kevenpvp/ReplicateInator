@@ -3541,7 +3541,7 @@ dependencies = [
 
 [[package]]
 name = "message_pro_macro"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "postcard",
  "proc-macro2",
@@ -3666,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "networkinator"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "bevy",
  "erased-serde",

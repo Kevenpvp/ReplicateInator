@@ -42,10 +42,10 @@ pub fn derive_server_replication_system(input: TokenStream) -> TokenStream {
     let mut paths_vec: Vec<Path> = Vec::new();
 
     for attr in &input.attrs {
-        if attr.path().is_ident("replication") {
-            if let Ok(paths) = attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated) {
-                paths_vec.extend(paths);
-            }
+        if attr.path().is_ident("replication")
+        && let Ok(paths) = attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)
+        {
+            paths_vec.extend(paths);
         }
     }
 

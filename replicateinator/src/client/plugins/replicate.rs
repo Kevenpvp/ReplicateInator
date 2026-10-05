@@ -18,6 +18,7 @@ use crate::shared::plugins::replicate::{ClientComponentRegistry, ClientResourceR
 
 pub struct ReplicateClient;
 
+#[allow(clippy::type_complexity)]
 pub struct SystemDataFunctions{
     pub replicated_spawned: fn(commands: &mut Commands, entity: Entity, spawned: f64, components_bytes: &HashMap<u32,Vec<u8>>, client_component_registry: &ClientComponentRegistry),
     pub type_id: TypeId
@@ -34,6 +35,7 @@ pub struct ClientSystemRegistry(pub u32, pub HashMap<u32, SystemDataFunctions>, 
 #[derive(Resource,Default)]
 pub struct EntitiesServerRefs(pub(crate) HashMap<Entity, Entity>);
 
+#[allow(clippy::type_complexity)]
 #[derive(Resource,Default)]
 pub struct BytesQueueSystems(pub HashMap<Entity,HashMap<TypeId,VecDeque<HashMap<u32, Vec<u8>>>>>);
 
@@ -66,7 +68,7 @@ pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutab
         let mut reflects: Vec<Box<dyn PartialReflect>> = Vec::new();
 
         for (id,bytes) in components_bytes {
-            if let Some(client_component_data) = client_component_registry.2.get(&id) {
+            if let Some(client_component_data) = client_component_registry.2.get(id) {
                 reflects.push((client_component_data.deserialize_fn)(bytes));
             }else {
                 warn!("Couldnt find component id {}", id);
@@ -179,17 +181,16 @@ pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutab
         for (entity, system) in query.iter_mut() {
             if let Some(mut entity_list) = bytes_queue_systems.0.remove(&entity)
             && let Some(system_queue) = entity_list.get_mut(&type_id)
+                && let Some(component_bytes) = system_queue.pop_back()
             {
-                if let Some(component_bytes) = system_queue.pop_back() {
-                    system.apply_replication(&mut commands, entity, &client_component_registry, &component_bytes);
-                }
+                system.apply_replication(&mut commands, entity, &client_component_registry, &component_bytes);
             }
         }
     }
 }
 
 pub trait ClientResourceReplicationSystem: Resource + Component<Mutability = Mutable> + Serialize + DeserializeOwned {
-    fn deserialize_resource(bytes: &Vec<u8>) -> Self {
+    fn deserialize_resource(bytes: &[u8]) -> Self {
         postcard::from_bytes::<Self>(bytes).unwrap()
     }
 
@@ -256,22 +257,22 @@ fn bytes_from_server(
         let replicate_system_to_client_message = &ev.message;
         let entity_ref = replicate_system_to_client_message.entity;
 
-        if let Some(system_data_functions) = client_system_registry.1.get(&replicate_system_to_client_message.system_id) {
-            if let Some(current_entity) = entities_server_refs.0.get(&entity_ref) {
-                let component_bytes = replicate_system_to_client_message.components_bytes.clone();
-                let type_id = system_data_functions.type_id;
+        if let Some(system_data_functions) = client_system_registry.1.get(&replicate_system_to_client_message.system_id)
+            && let Some(current_entity) = entities_server_refs.0.get(&entity_ref)
+        {
+            let component_bytes = replicate_system_to_client_message.components_bytes.clone();
+            let type_id = system_data_functions.type_id;
 
-                if let Some(entity_bytes) = bytes_queue_systems.0.get_mut(current_entity) {
-                    if let Some(system_queue) = entity_bytes.get_mut(&type_id) {
-                        system_queue.push_back(component_bytes);
-                    }else {
-                        entity_bytes.insert(type_id, VecDeque::from(vec![component_bytes]));
-                    }
+            if let Some(entity_bytes) = bytes_queue_systems.0.get_mut(current_entity) {
+                if let Some(system_queue) = entity_bytes.get_mut(&type_id) {
+                    system_queue.push_back(component_bytes);
                 }else {
-                    bytes_queue_systems.0.insert(entity_ref,HashMap::from([
-                        (type_id,VecDeque::from(vec![component_bytes]))
-                    ]));
+                    entity_bytes.insert(type_id, VecDeque::from(vec![component_bytes]));
                 }
+            }else {
+                bytes_queue_systems.0.insert(entity_ref,HashMap::from([
+                    (type_id,VecDeque::from(vec![component_bytes]))
+                ]));
             }
         }
     }
