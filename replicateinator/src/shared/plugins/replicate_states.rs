@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use bevy::app::App;
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::ecs::system::BoxedSystem;
-use bevy::prelude::{state_changed, IntoSystem, Plugin, Res, Resource, State, States, IntoScheduleConfigs, World, NextState, MessageReader, Commands, First};
+use bevy::prelude::{state_changed, IntoSystem, Plugin, Res, Resource, State, States, IntoScheduleConfigs, NextState, MessageReader, First};
 use bevy::state::state::FreelyMutableState;
-use networkinator::ConnectionMessage;
+use networkinator::{ConnectionMessage, NetResMut};
 use networkinator::NetRes;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, LocalPeerUUID, NetworkType};
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,6 @@ pub struct ServerStatesData {
     pub port_id: u32,
     pub send_args: Option<SendArgs>,
     pub just_authenticated: bool
-}
-
-pub struct ClientStatesData {
-    pub bytes_received_fn: fn(bytes: Vec<u8>, world: &mut World)
 }
 
 fn default_send_for_peers_when_changed<T: ServerStateSystem>(
@@ -52,14 +48,28 @@ pub trait ServerStateSystem: Serialize + DeserializeOwned + States {
 }
 
 pub trait ClientStateSystem: Serialize + DeserializeOwned + States + FreelyMutableState {
-    fn deserialize_state(bytes: Vec<u8>) -> Self {
-        postcard::from_bytes::<Self>(&bytes).unwrap()
+    fn deserialize_state(bytes: &Vec<u8>) -> Self {
+        postcard::from_bytes::<Self>(bytes).unwrap()
     }
 
-    fn new_bytes_from_server(bytes: Vec<u8>, world: &mut World) {
-        if let Some(mut next_state) = world.get_resource_mut::<NextState<Self>>() {
-            let state = Self::deserialize_state(bytes);
-            next_state.set(state);
+    fn new_bytes_from_server(
+        mut next_state: NetResMut<NextState<Self>>,
+        mut replicate_state_for_peer: MessageReader<MessageReceivedFromServer<ReplicateStateForPeer>>,
+        client_states_registry: NetRes<ClientStatesRegistry>,
+    )
+    {
+        let type_id = TypeId::of::<Self>();
+
+        for ev in replicate_state_for_peer.read() {
+            let replicate_state_for_peer_message = &ev.message;
+
+            if let Some(registry_type_id) = client_states_registry.1.get(&replicate_state_for_peer_message.state_id) {
+                if registry_type_id != &type_id { continue; }
+
+                let state = Self::deserialize_state(&replicate_state_for_peer_message.bytes);
+
+                next_state.set(state);
+            }
         }
     }
 }
@@ -73,7 +83,7 @@ pub trait ReplicatedStateSharedTrait {
 pub struct ServerStatesRegistry(pub(crate) u32, pub(crate) HashMap<u32, ServerStatesData>, pub(crate) HashMap<TypeId,u32>);
 
 #[derive(Resource,Default)]
-pub struct ClientStatesRegistry(pub(crate) u32, pub(crate) HashMap<u32, ClientStatesData>, pub(crate) HashMap<TypeId,u32>);
+pub struct ClientStatesRegistry(pub(crate) u32, pub(crate) HashMap<u32, TypeId>, pub(crate) HashMap<TypeId,u32>);
 
 #[derive(States, Clone, PartialEq, Eq, Hash, Debug, Serialize)]
 pub enum NormalStates{
@@ -108,8 +118,6 @@ impl Plugin for ReplicateStates {
 
         if is_client {
             app.init_resource::<ClientStatesRegistry>();
-
-            app.add_systems(First,state_bytes_from_server.after(check_messages_from_server));
         }
     }
 }
@@ -173,26 +181,9 @@ impl ReplicatedStateSharedTrait for App {
         let new_index = client_states_registry.0 + 1;
 
         client_states_registry.0 = new_index;
-        client_states_registry.1.insert(new_index, ClientStatesData{
-            bytes_received_fn: T::new_bytes_from_server,
-        });
+        client_states_registry.1.insert(new_index, type_id);
         client_states_registry.2.insert(type_id, new_index);
-    }
-}
 
-pub fn state_bytes_from_server(
-    mut replicate_state_for_peer: MessageReader<MessageReceivedFromServer<ReplicateStateForPeer>>,
-    client_states_registry: NetRes<ClientStatesRegistry>,
-    mut commands: Commands,
-){
-    for ev in replicate_state_for_peer.read() {
-        let replicate_state_for_peer_message = &ev.message;
-        let bytes = Vec::from(&*replicate_state_for_peer_message.bytes);
-        let client_states_data = client_states_registry.1.get(&replicate_state_for_peer_message.state_id).unwrap();
-        let bytes_received_fn = client_states_data.bytes_received_fn;
-
-        commands.queue(move |world: &mut World| {
-            bytes_received_fn(bytes, world);
-        });
+        self.add_systems(First,T::new_bytes_from_server.after(check_messages_from_server));
     }
 }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use bevy::app::{App, Plugin};
 use bevy::asset::uuid::Uuid;
 use bevy::ecs::component::ComponentId;
-use bevy::prelude::{Component, Entity, PartialReflect, Reflect, Resource, World};
+use bevy::prelude::{Component, Entity, PartialReflect, Reflect, Resource};
 use bevy::reflect::erased_serde::__private::serde::de::DeserializeOwned;
 use networkinator::ConnectionMessage;
 use networkinator::shared::plugins::network::{CurrentNetworkSides, NetworkType};
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct ReplicateShared;
 
 pub struct ClientComponentData{
-    pub deserialize_fn: fn(bytes: Vec<u8>) -> Box<dyn PartialReflect>
+    pub deserialize_fn: fn(bytes: &Vec<u8>) -> Box<dyn PartialReflect>
 }
 
 pub struct ServerComponentData {
@@ -25,10 +25,6 @@ pub struct ServerResourceData {
     pub port_id: u32,
     pub send_args: Option<SendArgs>,
     pub just_authenticated: bool
-}
-
-pub struct ClientResourceData{
-    pub new_bytes_from_server: fn(bytes: Vec<u8>, world: &mut World)
 }
 
 pub trait ReplicationSharedTrait {
@@ -72,7 +68,7 @@ pub struct ServerResourceRegistry(pub(crate) u32, pub(crate) HashMap<TypeId,u32>
 pub struct ClientComponentRegistry(pub(crate) u32, pub(crate) HashMap<TypeId, u32>, pub(crate) HashMap<u32, ClientComponentData>, pub(crate) HashMap<ComponentId, u32>);
 
 #[derive(Resource,Default)]
-pub struct ClientResourceRegistry(pub(crate) u32, pub(crate) HashMap<TypeId,u32>, pub(crate) HashMap<u32,ClientResourceData>);
+pub struct ClientResourceRegistry(pub(crate) u32, pub(crate) HashMap<TypeId,u32>, pub(crate) HashMap<u32, TypeId>);
 
 impl Plugin for ReplicateShared {
     fn build(&self, app: &mut App) {
@@ -104,8 +100,8 @@ impl Plugin for ReplicateShared {
     }
 }
 
-pub fn default_deserialize_component<T:Component + DeserializeOwned + PartialReflect>(bytes: Vec<u8>) -> Box<dyn PartialReflect> {
-    let component = postcard::from_bytes::<T>(&bytes).expect("Failed to deserialize ServerComponent");
+pub fn default_deserialize_component<T:Component + DeserializeOwned + PartialReflect>(bytes: &Vec<u8>) -> Box<dyn PartialReflect> {
+    let component = postcard::from_bytes::<T>(bytes).expect("Failed to deserialize ServerComponent");
 
     Box::new(component)
 }

@@ -1,5 +1,6 @@
 use std::any::{TypeId};
 use std::collections::{HashMap, VecDeque};
+use std::ops::DerefMut;
 use bevy::app::App;
 use bevy::ecs::component::Mutable;
 use bevy::ecs::lifecycle::HookContext;
@@ -13,12 +14,12 @@ use bevy::reflect::ReflectMut;
 use networkinator::{NetRes, NetResMut};
 use networkinator::shared::plugins::messaging::{check_messages_from_server, MessageReceivedFromServer, SendArgs};
 use networkinator::shared::plugins::network::{CurrentNetworkSides, NetworkType};
-use crate::shared::plugins::replicate::{ClientComponentRegistry, ClientResourceData, ClientResourceRegistry, ReplicateSystemSpawnedToClient, ReplicateSystemToClient, SendEntityRemovedForClient, SendResourceReplicatedForClient};
+use crate::shared::plugins::replicate::{ClientComponentRegistry, ClientResourceRegistry, ReplicateSystemSpawnedToClient, ReplicateSystemToClient, SendEntityRemovedForClient, SendResourceReplicatedForClient};
 
 pub struct ReplicateClient;
 
 pub struct SystemDataFunctions{
-    pub replicated_spawned: fn(commands: &mut Commands, entity: Entity, spawned: f64),
+    pub replicated_spawned: fn(commands: &mut Commands, entity: Entity, spawned: f64, components_bytes: &HashMap<u32,Vec<u8>>, client_component_registry: &ClientComponentRegistry),
     pub type_id: TypeId
 }
 
@@ -33,10 +34,12 @@ pub struct ClientSystemRegistry(pub u32, pub HashMap<u32, SystemDataFunctions>, 
 #[derive(Resource,Default)]
 pub struct EntitiesServerRefs(pub(crate) HashMap<Entity, Entity>);
 
+#[derive(Resource,Default)]
+pub struct BytesQueueSystems(pub HashMap<Entity,HashMap<TypeId,VecDeque<HashMap<u32, Vec<u8>>>>>);
+
 #[derive(Component)]
 #[component(on_remove = replicated_removed)]
 pub struct Replicated{
-    pub bytes_queue: HashMap<TypeId, VecDeque<HashMap<u32, Vec<u8>>>>,
     ref_server: Entity,
     pub connection_id: u32,
     pub port_id: u32,
@@ -104,7 +107,7 @@ pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutab
         Some(bundle)
     }
 
-    fn bytes_to_partials(components_bytes: HashMap<u32,Vec<u8>>, client_component_registry: &ClientComponentRegistry) -> Vec<Box<dyn PartialReflect>> {
+    fn bytes_to_partials(components_bytes: &HashMap<u32,Vec<u8>>, client_component_registry: &ClientComponentRegistry) -> Vec<Box<dyn PartialReflect>> {
         let mut reflects: Vec<Box<dyn PartialReflect>> = Vec::new();
 
         for (id,bytes) in components_bytes {
@@ -155,7 +158,7 @@ pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutab
         bundle
     }
 
-    fn apply_replication(&self, commands: &mut Commands, entity: Entity, client_component_registry: &ClientComponentRegistry, components_bytes: HashMap<u32, Vec<u8>>) {
+    fn apply_replication(&self, commands: &mut Commands, entity: Entity, client_component_registry: &ClientComponentRegistry, components_bytes: &HashMap<u32, Vec<u8>>) {
         let reflects = Self::bytes_to_partials(components_bytes, client_component_registry);
         let bundle = self.partials_to_bundle(reflects);
 
@@ -166,20 +169,28 @@ pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutab
         commands.entity(entity).insert(components);
     }
 
-    fn insert_on_unit_spawned(commands: &mut Commands, entity: Entity, _spawned: f64) {
-        commands.entity(entity).insert(Self::default());
+    fn insert_on_unit_spawned(commands: &mut Commands, entity: Entity, _spawned: f64, components_bytes: &HashMap<u32,Vec<u8>>, client_component_registry: &ClientComponentRegistry) {
+        let new_system = Self::default();
+        let reflects = Self::bytes_to_partials(components_bytes, client_component_registry);
+        let bundle = new_system.partials_to_bundle(reflects);
+        
+        commands.entity(entity).insert((new_system,bundle));
     }
 
     #[allow(clippy::type_complexity)]
     fn new_bytes_from_server(
-        mut query: Query<(Entity, &Self, &mut Replicated), (With<Self>, With<Replicated>)>,
+        mut query: Query<(Entity, &Self), (With<Self>, With<Replicated>)>,
         mut commands: Commands,
-        client_component_registry: NetRes<ClientComponentRegistry>
+        client_component_registry: NetRes<ClientComponentRegistry>,
+        mut bytes_queue_systems: NetResMut<BytesQueueSystems>,
     ){
-        for (entity, system, mut replicated) in query.iter_mut() {
-            if let Some(system_queue) = replicated.bytes_queue.remove(&TypeId::of::<Self>()) {
+        let type_id = TypeId::of::<Self>();
+        for (entity, system) in query.iter_mut() {
+            if let Some(mut entity_list) = bytes_queue_systems.0.remove(&entity)
+            && let Some(system_queue) = entity_list.remove(&type_id)
+            {
                 for component_bytes in system_queue {
-                    system.apply_replication(&mut commands, entity, &client_component_registry,component_bytes);
+                    system.apply_replication(&mut commands, entity, &client_component_registry, &component_bytes);
                 }
             }
         }
@@ -187,17 +198,32 @@ pub trait ClientReplicationSystem: Default + Component + Sized + Component<Mutab
 }
 
 pub trait ClientResourceReplicationSystem: Resource + Component<Mutability = Mutable> + Serialize + DeserializeOwned {
-    fn deserialize_resource(bytes: Vec<u8>) -> Self {
-        postcard::from_bytes::<Self>(&bytes).unwrap()
+    fn deserialize_resource(bytes: &Vec<u8>) -> Self {
+        postcard::from_bytes::<Self>(bytes).unwrap()
     }
 
-    fn new_bytes_from_server(bytes: Vec<u8>, world: &mut World) {
-        if let Some(mut resource) = world.get_resource_mut::<Self>() {
-            let new_self = Self::deserialize_resource(bytes);
-
-            *resource = new_self;
-        }else{
-            world.insert_resource(Self::deserialize_resource(bytes));
+    fn new_bytes_from_server(
+        mut resource: Option<NetResMut<Self>>,
+        mut send_resource_replicated_for_client: MessageReader<MessageReceivedFromServer<SendResourceReplicatedForClient>>,
+        client_resource_registry: NetRes<ClientResourceRegistry>,
+        mut commands: Commands
+    ) {
+        let type_id = TypeId::of::<Self>();
+        
+        for ev in send_resource_replicated_for_client.read() {
+            let send_resource_replicated_for_client_message = &ev.message;
+            
+            if let Some(resource_type_id) = client_resource_registry.2.get(&send_resource_replicated_for_client_message.resource_id) {
+                if resource_type_id != &type_id { continue; }
+                
+                let new_self = Self::deserialize_resource(&send_resource_replicated_for_client_message.resource_bytes);
+                
+                if let Some(resource) = &mut resource {
+                    *resource.deref_mut() = new_self;
+                }else { 
+                    commands.insert_resource(new_self);
+                }
+            }
         }
     }
 }
@@ -207,7 +233,9 @@ fn bytes_from_server(
     mut replicate_system_spawned_to_client: MessageReader<MessageReceivedFromServer<ReplicateSystemSpawnedToClient>>,
     mut commands: Commands,
     client_system_registry: NetRes<ClientSystemRegistry>,
-    mut entities_server_refs: NetResMut<EntitiesServerRefs>
+    mut entities_server_refs: NetResMut<EntitiesServerRefs>,
+    mut bytes_queue_systems: NetResMut<BytesQueueSystems>,
+    client_component_registry: NetRes<ClientComponentRegistry>
 ){
     for ev in replicate_system_spawned_to_client.read() {
         let replicate_system_to_client_message = &ev.message;
@@ -216,11 +244,7 @@ fn bytes_from_server(
         if let Some(system_data_functions) = client_system_registry.1.get(&replicate_system_to_client_message.system_id)
         && !entities_server_refs.0.contains_key(&entity_ref)
         {
-            let new_vec_dequeue = VecDeque::from(vec![replicate_system_to_client_message.components_bytes.clone()]);
             let new_entity = commands.spawn(Replicated{
-                bytes_queue: HashMap::from([
-                    (system_data_functions.type_id,new_vec_dequeue)
-                ]),
                 ref_server: entity_ref,
                 connection_id: ev.connection_id,
                 port_id: ev.port_id,
@@ -231,7 +255,7 @@ fn bytes_from_server(
             let replicated_spawned = system_data_functions.replicated_spawned;
             let time = replicate_system_to_client_message.time;
 
-            replicated_spawned(&mut commands, current_entity, time);
+            replicated_spawned(&mut commands, current_entity, time, &replicate_system_to_client_message.components_bytes, &client_component_registry);
 
             entities_server_refs.0.insert(entity_ref,entity);
         }
@@ -244,18 +268,19 @@ fn bytes_from_server(
         if let Some(system_data_functions) = client_system_registry.1.get(&replicate_system_to_client_message.system_id) {
             if let Some(current_entity) = entities_server_refs.0.get(&entity_ref) {
                 let component_bytes = replicate_system_to_client_message.components_bytes.clone();
-                let current_entity = *current_entity;
                 let type_id = system_data_functions.type_id;
-
-                commands.queue(move |world: &mut World| {
-                    let mut replicated = world.get_mut::<Replicated>(current_entity).unwrap();
-
-                    if let Some(system_queue) = replicated.bytes_queue.get_mut(&type_id) {
+                
+                if let Some(entity_bytes) = bytes_queue_systems.0.get_mut(current_entity) {
+                    if let Some(system_queue) = entity_bytes.get_mut(&type_id) {
                         system_queue.push_back(component_bytes);
                     }else {
-                        replicated.bytes_queue.insert(type_id, VecDeque::from(vec![component_bytes]));
+                        entity_bytes.insert(type_id, VecDeque::from(vec![component_bytes]));
                     }
-                });
+                }else {
+                    bytes_queue_systems.0.insert(entity_ref,HashMap::from([
+                        (type_id,VecDeque::from(vec![component_bytes]))
+                    ]));
+                }
             }
         }
     }
@@ -263,10 +288,11 @@ fn bytes_from_server(
 
 impl Plugin for ReplicateClient{
     fn build(&self, app: &mut App) {
+        app.init_resource::<BytesQueueSystems>();
         app.init_resource::<ClientSystemRegistry>();
         app.init_resource::<EntitiesServerRefs>();
-        app.add_systems(First,(bytes_from_server,resources_bytes_from_server).after(check_messages_from_server));
-        app.add_systems(First,entities_removed_from_server.after(resources_bytes_from_server));
+        app.add_systems(First,bytes_from_server.after(check_messages_from_server));
+        app.add_systems(First,entities_removed_from_server);
     }
 }
 
@@ -290,7 +316,7 @@ impl RegisterClientReplicationSystem for App {
 
         client_system_registry.2.insert(type_id,new_index);
 
-        self.add_systems(schedule,T::new_bytes_from_server);
+        self.add_systems(schedule,T::new_bytes_from_server.after(check_messages_from_server));
     }
 
     fn register_client_replication_resource<T: ClientResourceReplicationSystem>(&mut self) {
@@ -319,9 +345,9 @@ impl RegisterClientReplicationSystem for App {
 
         client_resource_registry.0 = new_index;
         client_resource_registry.1.insert(type_id,new_index);
-        client_resource_registry.2.insert(new_index,ClientResourceData{
-            new_bytes_from_server: T::new_bytes_from_server,
-        });
+        client_resource_registry.2.insert(new_index,type_id);
+        
+        self.add_systems(First,T::new_bytes_from_server.after(check_messages_from_server).before(entities_removed_from_server));
     }
 }
 
@@ -347,25 +373,5 @@ fn replicated_removed(
         let mut entities_server_refs = world.resource_mut::<EntitiesServerRefs>();
 
         entities_server_refs.0.remove(&ref_server);
-    }
-}
-
-fn resources_bytes_from_server(
-    mut send_resource_replicated_for_client: MessageReader<MessageReceivedFromServer<SendResourceReplicatedForClient>>,
-    client_resource_registry: NetRes<ClientResourceRegistry>,
-    mut commands: Commands
-){
-    for ev in send_resource_replicated_for_client.read() {
-        let send_resource_replicated_for_client_message = &ev.message;
-
-        if let Some(client_resource_data) = client_resource_registry.2.get(&send_resource_replicated_for_client_message.resource_id) {
-            let bytes = &send_resource_replicated_for_client_message.resource_bytes;
-            let vec = bytes.to_vec();
-            let new_bytes_from_server = client_resource_data.new_bytes_from_server;
-
-            commands.queue(move |world: &mut World| {
-                new_bytes_from_server(vec, world);
-            });
-        }
     }
 }
